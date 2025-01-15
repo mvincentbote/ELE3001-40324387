@@ -1,0 +1,933 @@
+/*
+CO2 - done
+Temp - done
+RH - done
+VOC - binning
+PM - done
+CH4 - in progress
+CO - done
+H2S? - done
+LCD - done
+Micro SD - done
+Real-time-clock - done
+alarm - in progress
+MATLAB - only after sensors are all done
+*/
+
+//**********SCD41 Declarations**********
+#include <Arduino.h>
+#include <SensirionI2CScd4x.h>
+#include <Wire.h>
+
+SensirionI2CScd4x scd4x; //I2C address: 0x62
+
+void printUint16Hex(uint16_t value) 
+{
+  Serial.print(value < 4096 ? "0" : "");
+  Serial.print(value < 256 ? "0" : "");
+  Serial.print(value < 16 ? "0" : "");
+  Serial.print(value, HEX);
+}
+
+void printSerialNumber(uint16_t serial0, uint16_t serial1, uint16_t serial2) 
+{
+  Serial.print("Serial: 0x");
+  printUint16Hex(serial0);
+  printUint16Hex(serial1);
+  printUint16Hex(serial2);
+  Serial.println();
+}
+
+//**********SPS30 Declarations**********
+#include <sps30.h> //I2C address: 0x69
+
+//**********CO & H2S declarations**********
+#include "DFRobot_MultiGasSensor.h"
+#define I2C_COMMUNICATION
+
+DFRobot_GAS_I2C H2S_sensor(&Wire, 0x74);
+DFRobot_GAS_I2C CO_sensor(&Wire, 0x75);
+
+//**********CH4 & VOC declarations**********
+#define CO2_drive 2
+#define reading A1
+#define reference A2
+#define VOC A0
+
+volatile int toggleCounter = 0;  // Counter to divide frequency (needs to be 3 Hz)
+
+//**********LCD Declarations**********
+#include <LCD_I2C.h>
+
+LCD_I2C lcd1(0x27, 20, 4);
+LCD_I2C lcd2(0x26, 20, 4);
+
+//**********RTC delcarations**********
+#include "RTClib.h"
+
+RTC_DS1307 rtc;
+
+char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+
+//**********Micro SD Declarations**********
+#include <SD.h>
+#include <SPI.h>
+
+const int chipSelect = 53;
+File myFile;
+
+//**********Alarm declarations**********
+#define LED 41
+#define Buzzer 40
+
+//Level 1 alarm counter
+int CO2_lvl1_counter = 0;
+int PM2_5_lvl1_counter = 0;
+int PM10_lvl1_counter = 0;
+int CO_lvl1_counter = 0;
+int H2S_lvl1_counter = 0;
+int CH4_lvl1_counter = 0;
+
+//Level 2 alarm counter
+int CO2_lvl2_counter = 0;
+int PM2_5_lvl2_counter = 0;
+int PM10_lvl2_counter = 0;
+int CO_lvl2_counter = 0;
+int H2S_lvl2_counter = 0;
+int CH4_lvl2_counter = 0;
+
+//level 1 alarm status
+bool CO2_lvl1;
+bool PM2_5_lvl1;
+bool PM10_lvl1;
+bool CO_lvl1;
+bool H2S_lvl1;
+bool CH4_lvl1;
+
+//Level 2 alarm status
+bool CO2_lvl2;
+bool PM2_5_lvl2;
+bool PM10_lvl2;
+bool CO_lvl2;
+bool H2S_lvl2;
+bool CH4_lvl2;
+
+//**********Function to check status of alarm**********
+bool Alarm_status_check (float reading, float limit, int counter, int time_limit)
+{
+  if(reading > limit)
+  {
+    counter = counter+1;
+    Serial.println(counter);
+  }
+  else
+  {
+    counter = 0;
+  }
+
+  if(counter > time_limit)
+  {
+    return true;
+  }
+  else
+  {
+    return false;
+  }
+}
+
+void setup() 
+{
+  Serial.begin(115200);
+
+  Wire.begin();
+
+  //**********Setting alarm states to false**********
+  //level 1 alarm status
+  CO2_lvl1 = false;
+  PM2_5_lvl1 = false;
+  PM10_lvl1 = false;
+  CO_lvl1 = false;
+  H2S_lvl1 = false;
+  CH4_lvl1 = false;
+
+  //Level 2 alarm status
+  CO2_lvl2 = false;
+  PM2_5_lvl2 = false;
+  PM10_lvl2 = false;
+  CO_lvl2 = false;
+  H2S_lvl2 = false;
+  CH4_lvl2 = false;
+
+  //**********SCD41 Setup**********
+  uint16_t error;
+  char errorMessage[256];
+
+  scd4x.begin(Wire);
+
+  // stop potentially previously started measurement
+  error = scd4x.stopPeriodicMeasurement();
+  if (error) 
+  {
+    Serial.print("Error trying to execute stopPeriodicMeasurement(): ");
+    errorToString(error, errorMessage, 256);
+    Serial.println(errorMessage);
+  }
+
+  uint16_t serial0;
+  uint16_t serial1;
+  uint16_t serial2;
+  error = scd4x.getSerialNumber(serial0, serial1, serial2);
+  if (error) 
+  {
+    Serial.print("Error trying to execute getSerialNumber(): ");
+    errorToString(error, errorMessage, 256);
+    Serial.println(errorMessage);
+  } 
+  else 
+  {
+    printSerialNumber(serial0, serial1, serial2);
+  }
+
+  // Start Measurement
+  error = scd4x.startPeriodicMeasurement();
+  if (error) 
+  {
+    Serial.print("Error trying to execute startPeriodicMeasurement(): ");
+    errorToString(error, errorMessage, 256);
+    Serial.println(errorMessage);
+  }
+
+  //**********SPS30 Setup**********
+  int16_t ret;
+  
+  sensirion_i2c_init();
+
+  while (sps30_probe() != 0) 
+  {
+    Serial.print("SPS sensor probing failed\n");
+    delay(500);
+  }
+
+  #ifndef PLOTTER_FORMAT
+  Serial.print("SPS sensor probing successful\n");
+  #endif
+
+  ret = sps30_start_measurement();
+  if (ret < 0) 
+  {
+    Serial.print("error starting measurement\n");
+  }
+
+  #ifndef PLOTTER_FORMAT
+  Serial.print("measurements started\n");
+  #endif
+
+  //**********CO & H2S setup**********
+  while(!H2S_sensor.begin())
+  {
+    Serial.println("No H2S sensor!");
+    delay(1000);
+  }
+  Serial.println("H2S sensor connected successfully!");
+
+  while(!CO_sensor.begin())
+  {
+    Serial.println("No CO sensor!");
+    delay(1000);
+  }
+  Serial.println("CO sensor connected successfully!");
+
+  H2S_sensor.changeAcquireMode(H2S_sensor.PASSIVITY);
+  CO_sensor.changeAcquireMode(H2S_sensor.PASSIVITY);
+
+  delay(1000);
+
+  H2S_sensor.setTempCompensation(H2S_sensor.OFF);
+  CO_sensor.setTempCompensation(H2S_sensor.OFF);
+
+  //**********CH4 & VOC setup**********
+  pinMode(CO2_drive, OUTPUT);
+
+  // Configure Timer 2 for CTC mode
+  TCCR2A = 0;                 // Clear Timer 2 Control Register A
+  TCCR2B = 0;                 // Clear Timer 2 Control Register B
+  TCCR2A |= (1 << WGM21);     // Set CTC mode (WGM21 = 1)
+  TCCR2B |= (1 << CS22) | (1 << CS21) | (1 << CS20);  // Set prescaler to 1024
+
+  // Set OCR2A for a ~24 Hz timer frequency
+  OCR2A = 255;  // Set the TOP value for CTC mode
+  TIMSK2 |= (1 << OCIE2A);  // Enable Timer 2 Compare Match A interrupt
+
+  sei();  // Enable global interrupts
+
+  //**********LCD setup**********
+  lcd1.begin(false);
+  lcd1.backlight();
+  lcd1.clear();
+  lcd2.begin(false);
+  lcd2.backlight();
+  lcd2.clear();
+
+  //**********RTC setup**********
+  if (! rtc.begin()) 
+  {
+    Serial.println("Couldn't find RTC");
+    Serial.flush();
+    abort();
+  }
+
+  if (! rtc.isrunning()) 
+  {
+    Serial.println("RTC is NOT running, let's set the time!");
+    // When time needs to be set on a new device, or after a power loss, the
+    // following line sets the RTC to the date & time this sketch was compiled
+    rtc.adjust(DateTime(2024, 11, 21, 18, 51, 0 ));
+    // This line sets the RTC with an explicit date & time, for example to set
+    // January 21, 2014 at 3am you would call:
+    // rtc.adjust(DateTime(2014, 1, 21, 3, 0, 0));
+  }
+
+  //**********Micro SD Setup**********
+  if (!SD.begin(chipSelect)) 
+  {
+    Serial.println("Micro SD Card initialization failed. Please check circuit");
+    while (true);
+  }
+
+  //openfile
+  /*myFile = SD.open("test8.csv", FILE_WRITE);
+  if (myFile) 
+  {
+    myFile.println("Timestamp,CO2(PPM),Temperature(*C),Humidity(%RH),PM2.5(ug/m3),PM10(ug/m3), CO(%vol), H2S(%vol), CH4(ppm)");
+    //close file
+    myFile.close();
+  } else 
+  {
+    // if the file didn't open, print an error:
+    Serial.println("error opening file");
+  }*/
+
+  //**********Alarm setup**********
+  pinMode (LED, OUTPUT);
+  pinMode (Buzzer, OUTPUT);
+}
+
+// Timer 2 Compare Match A Interrupt Service Routine
+ISR(TIMER2_COMPA_vect) 
+{
+  toggleCounter++;
+  
+  if (toggleCounter >= 8) 
+  {  // Divide 24 Hz by 8 to get 3 Hz
+    toggleCounter = 0;
+    digitalWrite(CO2_drive, !digitalRead(CO2_drive));  // Toggle pin CO2_drive
+  }
+}
+
+void loop() 
+{
+  //**********SCD41 Measurement**********
+  uint16_t error;
+  char errorMessage[256];
+
+  // Read Measurement
+  uint16_t CO2 = 0;
+  float Temp = 0.0f;
+  float RH = 0.0f;
+  bool isDataReady = false;
+  error = scd4x.getDataReadyFlag(isDataReady);
+  if (error) 
+  {
+    Serial.print("Error trying to execute getDataReadyFlag(): ");
+    errorToString(error, errorMessage, 256);
+    Serial.println(errorMessage);
+    return;
+  }
+  if (!isDataReady) 
+  {
+    return;
+  }
+  error = scd4x.readMeasurement(CO2, Temp, RH);
+  if (error) 
+  {
+    Serial.print("Error trying to execute readMeasurement(): ");
+    errorToString(error, errorMessage, 256);
+    Serial.println(errorMessage);
+  } 
+  else if (CO2 == 0) 
+  {
+    Serial.println("Invalid sample detected, skipping.");
+  } 
+  else 
+  {
+    Serial.print("Co2:");
+    Serial.print(CO2);
+    if(CO2_lvl1)
+  {
+    Serial.print(" (!!!)");
+  }
+    Serial.print("\t");
+
+    Serial.print("Temperature:");
+    Serial.print(Temp);
+    Serial.print("\t");
+
+    Serial.print("Humidity:");
+    Serial.println(RH);
+  }
+
+  //**********SPS30 Measurement**********
+  struct sps30_measurement m;
+  char serial[SPS30_MAX_SERIAL_LEN];
+  uint16_t data_ready;
+  int16_t ret;
+
+  do 
+  {
+    ret = sps30_read_data_ready(&data_ready);
+    if (ret < 0) 
+    {
+      Serial.print("error reading data-ready flag: ");
+      Serial.println(ret);
+    } else if (!data_ready)
+      Serial.print("data not ready, no new measurement available\n");
+    else
+      break;
+    delay(100); /* retry in 100ms */
+  } while (1);
+
+  ret = sps30_read_measurement(&m);
+  if (ret < 0) 
+  {
+    Serial.print("error reading measurement\n");
+  } 
+  else 
+  {
+    #ifndef PLOTTER_FORMAT
+    Serial.print("PM  2.5: ");
+    Serial.println(m.mc_2p5);
+    if(PM2_5_lvl1)
+    {
+      Serial.println("Elevated PM2.5");
+    }
+
+    Serial.print("PM 10.0: ");
+    Serial.println(m.mc_10p0);
+    #endif
+    Serial.println();
+  }
+
+  //**********CO & H2S Measurement**********
+  float CO = CO_sensor.readGasConcentrationPPM();
+  float H2S = H2S_sensor.readGasConcentrationPPM();
+
+  Serial.print("Ambient ");
+  Serial.print(H2S_sensor.queryGasType());
+  Serial.print(" concentration is: ");
+  Serial.print(H2S);
+  Serial.println(" %vol");
+
+  Serial.print("Ambient ");
+  Serial.print(CO_sensor.queryGasType());
+  Serial.print(" concentration is: ");
+  Serial.print(CO);
+  Serial.println(" %vol");
+
+  //**********CH4 & VOC Measurement**********
+  analogWrite(CO2_drive, 127);
+
+  int CH4_reading = analogRead(reading); 
+  int ref = analogRead(reference); 
+  int VOC_reading = analogRead(VOC);
+
+  // Print the value to the Serial Monitor
+  Serial.print("Analog Reading: ");
+  Serial.println(CH4_reading);
+  Serial.print("Reference Reading: ");
+  Serial.println(ref);
+  Serial.print("VOC Reading: ");
+  Serial.println(VOC_reading);
+  Serial.println();
+
+  //**********Displaying data on LCDs**********
+  lcd1.setCursor(0, 0);
+  lcd1.print("CO2:");
+  lcd1.print(CO2);
+  lcd1.print("ppm");
+  if(CO2_lvl1)
+  {
+    lcd1.print(" (!!!)");
+  }
+
+  lcd1.setCursor(0, 1);
+  lcd1.print("Temp:");
+  lcd1.print(Temp);
+  lcd1.print("'C");
+
+  lcd1.setCursor(0, 2);
+  lcd1.print("Humidity:");
+  lcd1.print(RH);
+  lcd1.print("%");
+
+  lcd1.setCursor(0, 3);
+  lcd1.print("CH4:");
+  lcd1.print(CH4_reading);
+  lcd1.print("ppm");
+  if(CH4_lvl1)
+  {
+    lcd1.print("(!!!)");
+  }
+
+  lcd2.setCursor(0, 0);
+  lcd2.print("PM2.5:");
+  lcd2.print(m.mc_2p5);
+  lcd2.print("ug/m3");
+  if(PM2_5_lvl1)
+  {
+    lcd2.print("(!!!)");
+  }
+
+  lcd2.setCursor(0, 1);
+  lcd2.print("PM10:");
+  lcd2.print(m.mc_10p0);
+  lcd2.print("ug/m3");
+  if(PM10_lvl1)
+  {
+    lcd2.print("(!!!)");
+  }
+
+  lcd2.setCursor(0, 2);
+  lcd2.print("CO:");
+  lcd2.print(CO);
+  lcd2.print("%vol");
+  if(CO_lvl1)
+  {
+    lcd2.print("(!!!)");
+  }
+
+  lcd2.setCursor(0, 3);
+  lcd2.print("H2S:");
+  lcd2.print(H2S);
+  lcd2.print("%vol");
+  if(H2S_lvl1)
+  {
+    lcd2.print("(!!!)");
+  }
+
+  //**********Setting date/time**********
+  DateTime now = rtc.now();
+
+  Serial.print(now.year(), DEC);
+  Serial.print('/');
+  Serial.print(now.month(), DEC);
+  Serial.print('/');
+  Serial.print(now.day(), DEC);
+  Serial.print(" (");
+  Serial.print(daysOfTheWeek[now.dayOfTheWeek()]);
+  Serial.print(") ");
+  Serial.print(now.hour(), DEC);
+  Serial.print(':');
+  Serial.print(now.minute(), DEC);
+  Serial.print(':');
+  Serial.print(now.second(), DEC);
+  Serial.println();
+
+  //**********Creating filename to match current day**********
+  String year_file = String(now.year());
+  String month_file = String(now.month());
+  String day_file = String(now.day());
+  String file_name = day_file + month_file + year_file + ".csv";
+  Serial.print("filename: ");
+  Serial.println(file_name);
+  Serial.println();
+
+  //**********Code to create column titles for new file**********
+  if(!SD.exists(file_name.c_str()))
+  {
+    Serial.println("New File Created!");
+    myFile = SD.open(file_name.c_str(), FILE_WRITE);
+    if (myFile) 
+    {
+      myFile.println("Timestamp,CO2(PPM),Temperature(*C),Humidity(%RH),PM2.5(ug/m3),PM10(ug/m3), CO(%vol), H2S(%vol), CH4(ppm),");
+      //close file
+      myFile.close();
+    } else 
+    {
+      // if the file didn't open, print an error:
+      Serial.println("error creating column titles");
+    }
+  }
+
+  //**********Alarm safety check**********
+  //Level 1 alarm limits
+  int CO2_lvl1_lim = 1000;
+  float PM2_5_lvl1_lim = 15;
+  float PM10_lvl1_lim = 45;
+  float CO_lvl1_lim = 0.0035;
+  float H2S_lvl1_lim = 0.01;
+  int CH4_lvl1_lim = 100;
+
+  //Level 1 alarm time limits - Sensor checks every 5 seconds -> time limit/12 to get in minutes
+  int CO2_lvl1_time = 720; 
+  int PM2_5_lvl1_time = 720;
+  int PM10_lvl1_time = 720;
+  int CO_lvl1_time = 720;
+  int H2S_lvl1_time = 360;
+  int CH4_lvl1_time = 720;
+
+  //Level 2 alarm limits
+  int CO2_lvl2_lim = 5000;
+  float PM2_5_lvl2_lim = 25;
+  float PM10_lvl2_lim = 75;
+  float CO_lvl2_lim = 0.02;
+  float H2S_lvl2_lim = 0.03;
+  float CH4_lvl2_lim = 500;
+
+  //Level 2 alarm time limits - Sensor checks every 5 seconds -> time limit/12 to get in minutes
+  int CO2_lvl2_time = 120;
+  int PM2_5_lvl2_time = 120;
+  int PM10_lvl2_time = 120;
+  int CO_lvl2_time = 60;
+  int H2S_lvl2_time = 120;
+  int CH4_lvl2_time = 120;
+
+  //**********Level 1 Alarm Monitoring
+  //CO2 level 1 alarm monitoring
+  if(CO2 > CO2_lvl1_lim)
+  {
+    CO2_lvl1_counter++;
+  }
+  else
+  {
+    CO2_lvl1_counter = 0;
+  }
+
+  if(CO2_lvl1_counter > CO2_lvl1_time)
+  {
+    CO2_lvl1 = true;
+  }
+
+  //PM2.5 level 1 alarm monitoring
+  if(m.mc_2p5 > PM2_5_lvl1_lim)
+  {
+    PM2_5_lvl1_counter++;
+  }
+  else
+  {
+    PM2_5_lvl1_counter = 0;
+  }
+
+  if(PM2_5_lvl1_counter > PM2_5_lvl1_time)
+  {
+    PM2_5_lvl1 = true;
+  }
+
+  //PM10 level 1 alarm monitoring
+  if(m.mc_10p0 > PM10_lvl1_lim)
+  {
+    PM10_lvl1_counter++;
+  }
+  else
+  {
+    PM10_lvl1_counter = 0;
+  }
+
+  if(PM10_lvl1_counter > PM10_lvl1_time)
+  {
+    PM10_lvl1 = true;
+  }
+
+  //CO level 1 alarm monitoring
+  if(CO > CO_lvl1_lim)
+  {
+    CO_lvl1_counter++;
+  }
+  else
+  {
+    CO_lvl1_counter = 0;
+  }
+
+  if(CO_lvl1_counter > CO_lvl1_time)
+  {
+    CO_lvl1 = true;
+  }
+
+  //H2S level 1 alarm monitoring
+  if(H2S > H2S_lvl1_lim)
+  {
+    H2S_lvl1_counter++;
+  }
+  else
+  {
+    H2S_lvl1_counter = 0;
+  }
+
+  if(H2S_lvl1_counter > H2S_lvl1_time)
+  {
+    H2S_lvl1 = true;
+  }
+
+  //CH4 level 1 alarm monitoring
+  if(CH4_reading > CH4_lvl1_lim)
+  {
+    CH4_lvl1_counter++;
+  }
+  else
+  {
+    CH4_lvl1_counter = 0;
+  }
+
+  if(CH4_lvl1_counter > CH4_lvl1_time)
+  {
+    CH4_lvl1 = true;
+  }
+
+  //**********Level 2 Alarm Monitoring
+  //CO2 level 2 alarm monitoring
+  if(CO2 > CO2_lvl2_lim)
+  {
+    CO2_lvl2_counter++;
+    CO2_lvl1_counter = 0;
+  }
+  else
+  {
+    CO2_lvl2_counter = 0;
+  }
+
+  if(CO2_lvl2_counter > CO2_lvl2_time)
+  {
+    CO2_lvl2 = true;
+    CO2_lvl1 = false;
+  }
+
+  //PM2.5 level 2 alarm monitoring
+  if(m.mc_2p5 > PM2_5_lvl2_lim)
+  {
+    PM2_5_lvl2_counter++;
+    PM2_5_lvl1_counter = 0;
+  }
+  else
+  {
+    PM2_5_lvl2_counter = 0;
+  }
+
+  if(PM2_5_lvl2_counter > PM2_5_lvl2_time)
+  {
+    PM2_5_lvl2 = true;
+    PM2_5_lvl1 = false;
+  }
+
+  //PM10 level 2 alarm monitoring
+  if(m.mc_10p0 > PM10_lvl2_lim)
+  {
+    PM10_lvl2_counter++;
+    PM10_lvl1_counter = 0;
+  }
+  else
+  {
+    PM10_lvl2_counter = 0;
+  }
+
+  if(PM10_lvl2_counter > PM10_lvl2_time)
+  {
+    PM10_lvl2 = true;
+    PM10_lvl1 = false;
+  }
+
+  //CO level 2 alarm monitoring
+  if(CO > CO_lvl2_lim)
+  {
+    CO_lvl2_counter++;
+    CO_lvl1_counter = 0;
+  }
+  else
+  {
+    CO_lvl2_counter = 0;
+  }
+
+  if(CO_lvl2_counter > CO_lvl2_time)
+  {
+    CO_lvl2 = true;
+    CO_lvl1 = false;
+  }
+
+  //H2S level 2 alarm monitoring
+  if(H2S > H2S_lvl2_lim)
+  {
+    H2S_lvl2_counter++;
+    H2S_lvl1_counter = 0;
+  }
+  else
+  {
+    H2S_lvl2_counter = 0;
+  }
+
+  if(H2S_lvl2_counter > H2S_lvl2_time)
+  {
+    H2S_lvl2 = true;
+    H2S_lvl1 = false;
+  }
+
+  //CH4 level 2 alarm monitoring
+  if(CH4_reading > CH4_lvl2_lim)
+  {
+    CH4_lvl2_counter++;
+    CH4_lvl1_counter = 0;
+  }
+  else
+  {
+    CH4_lvl2_counter = 0;
+  }
+
+  if(CH4_lvl2_counter > CH4_lvl2_time)
+  {
+    CH4_lvl2 = true;
+    CH4_lvl1 = false;
+  }
+
+  //**********Saving Data**********
+  myFile = SD.open(file_name.c_str(), FILE_WRITE);
+  if (myFile) 
+  {
+    Serial.println("Saving data...");
+
+    myFile.print(now.day());
+    myFile.print('/');
+    myFile.print(now.month());
+    myFile.print('/');
+    myFile.print(now.year());
+
+    myFile.print(' ');
+
+    myFile.print(now.hour(), DEC);
+    myFile.print(':');
+    myFile.print(now.minute(), DEC);
+    myFile.print(':');
+    myFile.print(now.second(), DEC);
+
+    myFile.print(',');
+
+    //saving sensor data
+    myFile.print(CO2);
+    if(CO2_lvl1)
+    {
+      myFile.print(" (elevated)");
+    }
+    myFile.print(",");
+
+    myFile.print(Temp);
+    myFile.print(",");
+
+    myFile.print(RH);
+    myFile.print(",");
+
+    //myFile.print(VOC);
+    //myFile.println(",");
+
+    myFile.print(m.mc_2p5);
+    myFile.print(",");
+
+    myFile.print(m.mc_10p0);
+    myFile.print(",");
+
+    myFile.print(CO);
+    myFile.print(",");
+
+    myFile.print(H2S);
+    myFile.print(",");
+
+    myFile.print(CH4_reading);
+    myFile.println(",");
+
+    Serial.println("Data saved...");
+    //close file
+    myFile.close();
+  } else 
+  {
+    // if the file didn't open, print an error:
+    Serial.println("error opening file");
+  }
+
+  //**********Level 1 alarm set off**********
+  if (CO2_lvl1||PM2_5_lvl1||PM10_lvl1||CO_lvl1||H2S_lvl1||CH4_lvl1)
+  {
+    digitalWrite(LED, HIGH);
+  }
+
+  //**********Level 2 alarm set off**********
+  if (CO2_lvl2||PM2_5_lvl2||PM10_lvl2||CO_lvl2||H2S_lvl2||CH4_lvl1) 
+  {
+    lcd1.clear();
+    lcd2.clear();
+
+    lcd1.setCursor(0, 0);
+    lcd1.print("WARNING LETHAL LVLS");
+
+    if(CO2_lvl2)
+    {
+      lcd1.setCursor(0, 1);
+      lcd1.print("CO2:");
+      lcd1.print(CO2);
+      lcd1.print("ppm");
+    }
+
+    if(PM2_5_lvl2)
+    {
+      lcd1.setCursor(0, 2);
+      lcd1.print("PM2.5:");
+      lcd1.print(m.mc_2p5);
+      lcd1.print("ug/m3");
+    }
+
+    if(PM10_lvl2)
+    {
+      lcd1.setCursor(0, 3);
+      lcd1.print("PM10:");
+      lcd1.print(m.mc_10p0);
+      lcd1.print("ug/m3");
+    }
+
+    if(CO_lvl2)
+    {
+      lcd2.setCursor(0, 0);
+      lcd2.print("CO:");
+      lcd2.print(CO);
+      lcd2.print("%vol");
+    }
+
+    if(H2S_lvl2)
+    {
+      lcd2.setCursor(0, 1);
+      lcd2.print("H2S:");
+      lcd2.print(H2S);
+      lcd2.print("%vol");
+    }
+
+    if(CH4_lvl2)
+    {
+      lcd2.setCursor(0, 2);
+      lcd2.print("CH4:");
+      lcd2.print(CH4_reading);
+      lcd2.print("ppm");
+    }
+
+    for (int i = 0; i < 5; ++i)
+    {
+        lcd1.backlight();
+        lcd2.backlight();
+        delay(500);
+        lcd1.noBacklight();
+        lcd2.backlight();
+        delay(500);
+    }
+
+    digitalWrite(Buzzer, HIGH);
+  }
+
+  delay(2500);
+
+  digitalWrite(LED, LOW);
+  digitalWrite(Buzzer, LOW);
+
+  delay(2500);
+}
