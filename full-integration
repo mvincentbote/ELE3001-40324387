@@ -791,6 +791,20 @@ void loop()
   {
     Serial.println("Saving data...");
 
+    lcd2.setCursor(0, 3);
+    lcd2.print("H2S:");
+    lcd2.print(H2S);
+    lcd2.print("%vol");
+    if(H2S_lvl1)
+    {
+      lcd2.print("(!!!)");
+      lcd2.print("  s");
+    }
+    else
+    {
+      lcd2.print("       s");
+    }
+
     myFile.print(now.day());
     myFile.print('/');
     myFile.print(now.month());
@@ -931,3 +945,4 @@ void loop()
 
   delay(2500);
 }
+
