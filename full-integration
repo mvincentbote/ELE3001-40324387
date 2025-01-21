@@ -488,13 +488,9 @@ void loop()
   }
 
   lcd2.setCursor(0, 1);
-  lcd2.print("PM10:");
-  lcd2.print(m.mc_10p0);
-  lcd2.print("ug/m3");
-  if(PM10_lvl1)
-  {
-    lcd2.print("(!!!)");
-  }
+  lcd2.print("VOC: ");
+  lcd2.print(VOC_reading);
+  lcd2.print("ppm");
 
   lcd2.setCursor(0, 2);
   lcd2.print("CO:");
@@ -548,7 +544,7 @@ void loop()
     myFile = SD.open(file_name.c_str(), FILE_WRITE);
     if (myFile) 
     {
-      myFile.println("Timestamp,CO2(PPM),Temperature(*C),Humidity(%RH),PM2.5(ug/m3),PM10(ug/m3), CO(%vol), H2S(%vol), CH4(ppm),");
+      myFile.println("Timestamp,CO2(PPM),Temperature(*C),Humidity(%RH),PM2.5(ug/m3),PM10(ug/m3), CO(%vol), H2S(%vol), CH4(ppm), VOC(ppm),");
       //close file
       myFile.close();
     } else 
@@ -827,6 +823,10 @@ void loop()
     {
       myFile.print(" (elevated)");
     }
+    if(CO2_lvl2)
+    {
+      myFile.print(" (dangerous)");
+    }
     myFile.print(",");
 
     myFile.print(Temp);
@@ -835,22 +835,62 @@ void loop()
     myFile.print(RH);
     myFile.print(",");
 
-    //myFile.print(VOC);
-    //myFile.println(",");
-
     myFile.print(m.mc_2p5);
+    if(PM2_5_lvl1)
+    {
+      myFile.print(" (elevated)");
+    }
+    if(PM2_5_lvl2)
+    {
+      myFile.print(" (dangerous)");
+    }
     myFile.print(",");
 
     myFile.print(m.mc_10p0);
+    if(PM10_lvl1)
+    {
+      myFile.print(" (elevated)");
+    }
+    if(PM10_lvl2)
+    {
+      myFile.print(" (dangerous)");
+    }
     myFile.print(",");
 
     myFile.print(CO);
+    if(CO_lvl1)
+    {
+      myFile.print(" (elevated)");
+    }
+    if(CO_lvl2)
+    {
+      myFile.print(" (dangerous)");
+    }
     myFile.print(",");
 
     myFile.print(H2S);
+    if(H2S_lvl1)
+    {
+      myFile.print(" (elevated)");
+    }
+    if(H2S_lvl2)
+    {
+      myFile.print(" (dangerous)");
+    }
     myFile.print(",");
 
     myFile.print(CH4_reading);
+    if(CH4_lvl1)
+    {
+      myFile.print(" (elevated)");
+    }
+    if(CH4_lvl2)
+    {
+      myFile.print(" (dangerous)");
+    }
+    myFile.println(",");
+
+    myFile.print(VOC_reading);
     myFile.println(",");
 
     Serial.println("Data saved...");
@@ -869,7 +909,7 @@ void loop()
   }
 
   //**********Level 2 alarm set off**********
-  if (CO2_lvl2||PM2_5_lvl2||PM10_lvl2||CO_lvl2||H2S_lvl2||CH4_lvl1) 
+  if (CO2_lvl2||PM2_5_lvl2||PM10_lvl2||CO_lvl2||H2S_lvl2||CH4_lvl2) 
   {
     lcd1.clear();
     lcd2.clear();
@@ -945,4 +985,3 @@ void loop()
 
   delay(2500);
 }
-
