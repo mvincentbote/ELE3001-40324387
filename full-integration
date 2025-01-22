@@ -425,20 +425,20 @@ void loop()
   Serial.print(H2S_sensor.queryGasType());
   Serial.print(" concentration is: ");
   Serial.print(H2S);
-  Serial.println(" %vol");
+  Serial.println(" ppm");
 
   Serial.print("Ambient ");
   Serial.print(CO_sensor.queryGasType());
   Serial.print(" concentration is: ");
   Serial.print(CO);
-  Serial.println(" %vol");
+  Serial.println(" ppm");
 
   //**********CH4 & VOC Measurement**********
   analogWrite(CO2_drive, 127);
 
-  int CH4_reading = analogRead(reading); 
+  float CH4_reading = analogRead(reading); 
   int ref = analogRead(reference); 
-  int VOC_reading = analogRead(VOC);
+  float VOC_reading = (analogRead(VOC) - 35)*0.065;
 
   // Print the value to the Serial Monitor
   Serial.print("Analog Reading: ");
@@ -488,14 +488,14 @@ void loop()
   }
 
   lcd2.setCursor(0, 1);
-  lcd2.print("VOC: ");
+  lcd2.print("VOC:");
   lcd2.print(VOC_reading);
   lcd2.print("ppm");
 
   lcd2.setCursor(0, 2);
   lcd2.print("CO:");
   lcd2.print(CO);
-  lcd2.print("%vol");
+  lcd2.print("ppm");
   if(CO_lvl1)
   {
     lcd2.print("(!!!)");
@@ -504,7 +504,7 @@ void loop()
   lcd2.setCursor(0, 3);
   lcd2.print("H2S:");
   lcd2.print(H2S);
-  lcd2.print("%vol");
+  lcd2.print("ppm");
   if(H2S_lvl1)
   {
     lcd2.print("(!!!)");
@@ -544,7 +544,7 @@ void loop()
     myFile = SD.open(file_name.c_str(), FILE_WRITE);
     if (myFile) 
     {
-      myFile.println("Timestamp,CO2(PPM),Temperature(*C),Humidity(%RH),PM2.5(ug/m3),PM10(ug/m3), CO(%vol), H2S(%vol), CH4(ppm), VOC(ppm),");
+      myFile.println("Timestamp,CO2(PPM),Temperature(*C),Humidity(%RH),PM2.5(ug/m3),PM10(ug/m3), CO(ppm), H2S(ppm), CH4(ppm), VOC(ppm),");
       //close file
       myFile.close();
     } else 
@@ -559,8 +559,8 @@ void loop()
   int CO2_lvl1_lim = 1000;
   float PM2_5_lvl1_lim = 15;
   float PM10_lvl1_lim = 45;
-  float CO_lvl1_lim = 0.0035;
-  float H2S_lvl1_lim = 0.01;
+  float CO_lvl1_lim = 10;
+  float H2S_lvl1_lim = 100;
   int CH4_lvl1_lim = 100;
 
   //Level 1 alarm time limits - Sensor checks every 5 seconds -> time limit/12 to get in minutes
@@ -575,8 +575,8 @@ void loop()
   int CO2_lvl2_lim = 5000;
   float PM2_5_lvl2_lim = 25;
   float PM10_lvl2_lim = 75;
-  float CO_lvl2_lim = 0.02;
-  float H2S_lvl2_lim = 0.03;
+  float CO_lvl2_lim = 200;
+  float H2S_lvl2_lim = 300;
   float CH4_lvl2_lim = 500;
 
   //Level 2 alarm time limits - Sensor checks every 5 seconds -> time limit/12 to get in minutes
@@ -790,7 +790,7 @@ void loop()
     lcd2.setCursor(0, 3);
     lcd2.print("H2S:");
     lcd2.print(H2S);
-    lcd2.print("%vol");
+    lcd2.print("ppm");
     if(H2S_lvl1)
     {
       lcd2.print("(!!!)");
@@ -888,7 +888,7 @@ void loop()
     {
       myFile.print(" (dangerous)");
     }
-    myFile.println(",");
+    myFile.print(",");
 
     myFile.print(VOC_reading);
     myFile.println(",");
@@ -971,7 +971,7 @@ void loop()
         lcd2.backlight();
         delay(500);
         lcd1.noBacklight();
-        lcd2.backlight();
+        lcd2.noBacklight();
         delay(500);
     }
 
